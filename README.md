@@ -1,4 +1,9 @@
 Instructions:
+
+git clone https://github.com/mysterefrank/roger_repair_scanline_defects.git
+cd roger_repair_scanline_defects
+
+
 Install requirements file
 Run ```pip install -r requirements.txt``` in terminal
 
