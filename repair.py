@@ -132,8 +132,18 @@ def repair_scanlines(image_path, output_path, sensitivity=1.15, min_line_length=
         original_image = Image.open(image_path)
         original_array = np.array(original_image)
         
+        # Store alpha channel if it exists
+        has_alpha = original_array.shape[-1] == 4
+        if has_alpha:
+            alpha_channel = original_array[..., 3]
+            original_array_rgb = original_array[..., :3]
+        else:
+            original_array_rgb = original_array
+            
         print("Detecting scanlines...")
-        mask = detect_scanlines(original_image, sensitivity, min_line_length)
+        # Convert back to PIL Image with just RGB channels
+        original_image_rgb = Image.fromarray(original_array_rgb)
+        mask = detect_scanlines(original_image_rgb, sensitivity, min_line_length)
         mask_array = np.array(mask)
         
         # Save mask temporarily
@@ -141,11 +151,15 @@ def repair_scanlines(image_path, output_path, sensitivity=1.15, min_line_length=
         mask.save(mask_path)
         
         print("Running AI inpainting...")
+        # Use RGB version for inpainting
+        temp_rgb_path = f"temp_rgb_{Path(image_path).stem}.png"
+        original_image_rgb.save(temp_rgb_path)
+        
         output = replicate.run(
             "stability-ai/stable-diffusion-inpainting:95b7223104132402a9ae91cc677285bc5eb997834bd2349fa486f53910fd68b3",
             input={
                 "mask": open(mask_path, "rb"),
-                "image": open(image_path, "rb"),
+                "image": open(temp_rgb_path, "rb"),
                 "width": 768,
                 "height": 576,
                 "prompt": "grainy nigerian horror movie made for tv",
@@ -162,23 +176,17 @@ def repair_scanlines(image_path, output_path, sensitivity=1.15, min_line_length=
         inpainted_data = output[0].read()
         inpainted_image = Image.open(BytesIO(inpainted_data))
         inpainted_array = np.array(inpainted_image)
-        
-        # Add this new code here to handle RGBA to RGB conversion
-        if original_array.shape[-1] == 4:  # If original has alpha channel
-            original_array = original_array[..., :3]  # Keep only RGB channels
-        if inpainted_array.shape[-1] == 4:  # If inpainted has alpha channel
-            inpainted_array = inpainted_array[..., :3]  # Keep only RGB channels
             
         # Resize if needed
-        if original_array.shape != inpainted_array.shape:
-            inpainted_array = cv2.resize(inpainted_array, (original_array.shape[1], original_array.shape[0]))
+        if original_array_rgb.shape != inpainted_array.shape:
+            inpainted_array = cv2.resize(inpainted_array, (original_array_rgb.shape[1], original_array_rgb.shape[0]))
         
         # Take darker pixels from AI result
-        ai_result = np.minimum(original_array, inpainted_array)
+        ai_result = np.minimum(original_array_rgb, inpainted_array)
         
         # Detect bad repairs
         print("Checking repair quality...")
-        bad_repair_mask = detect_bad_repairs(original_array, ai_result, mask_array)
+        bad_repair_mask = detect_bad_repairs(original_array_rgb, ai_result, mask_array)
         
         # Save debug visualization of bad repairs
         debug_path = f"debug_bad_repairs_{Path(image_path).stem}.png"
@@ -187,7 +195,7 @@ def repair_scanlines(image_path, output_path, sensitivity=1.15, min_line_length=
         # Use interpolation for bad repairs
         print("Fixing bad repairs with interpolation...")
         final_result = ai_result.copy()
-        interpolated = interpolate_scanlines(original_array, bad_repair_mask)
+        interpolated = interpolate_scanlines(original_array_rgb, bad_repair_mask)
         
         # Where repairs were bad, use interpolated values instead
         if len(final_result.shape) == 3:
@@ -200,14 +208,21 @@ def repair_scanlines(image_path, output_path, sensitivity=1.15, min_line_length=
                                   interpolated, 
                                   final_result)
         
+        # Reattach alpha channel if it existed
+        if has_alpha:
+            final_result_rgba = np.dstack((final_result, alpha_channel))
+        else:
+            final_result_rgba = final_result
+        
         # Save the result
         print(f"Saving result to {output_path}")
-        final_image = Image.fromarray(final_result)
+        final_image = Image.fromarray(final_result_rgba)
         final_image.save(output_path)
         
         # Clean up temporary files
         os.remove(mask_path)
         os.remove(debug_path)
+        os.remove(temp_rgb_path)
         
         print(f"Successfully processed {image_path}")
         return True
@@ -217,7 +232,7 @@ def repair_scanlines(image_path, output_path, sensitivity=1.15, min_line_length=
         import traceback
         traceback.print_exc()
         return False
-
+    
 def process_directory(input_dir, output_dir, sleep_time=1):
     """
     Process all images in a directory
