@@ -163,6 +163,12 @@ def repair_scanlines(image_path, output_path, sensitivity=1.15, min_line_length=
         inpainted_image = Image.open(BytesIO(inpainted_data))
         inpainted_array = np.array(inpainted_image)
         
+        # Add this new code here to handle RGBA to RGB conversion
+        if original_array.shape[-1] == 4:  # If original has alpha channel
+            original_array = original_array[..., :3]  # Keep only RGB channels
+        if inpainted_array.shape[-1] == 4:  # If inpainted has alpha channel
+            inpainted_array = inpainted_array[..., :3]  # Keep only RGB channels
+            
         # Resize if needed
         if original_array.shape != inpainted_array.shape:
             inpainted_array = cv2.resize(inpainted_array, (original_array.shape[1], original_array.shape[0]))
